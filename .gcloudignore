@@ -1,0 +1,5 @@
+# This file specifies files that should not be uploaded to Google Cloud Build.
+.gcloudignore
+.git
+.github
+target/

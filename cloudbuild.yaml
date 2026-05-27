@@ -1,0 +1,63 @@
+# Google Cloud Build configuration file for building and deploying npmv to Cloud Run.
+#
+# To run this build manually:
+#   gcloud builds submit --config cloudbuild.yaml
+#
+# Make sure you have the Artifact Registry repository created, or update substitutions
+# to use the legacy Container Registry (gcr.io).
+#
+# To create an Artifact Registry repository:
+#   gcloud artifacts repositories create npmv-repo \
+#       --repository-format=docker \
+#       --location=ap-southeast-2 \
+#       --description="Docker repository for npmv"
+
+steps:
+  # 1. Build the container image
+  - name: "gcr.io/cloud-builders/docker"
+    id: "Build Container Image"
+    args:
+      - "build"
+      - "-t"
+      - "$_AR_LOCATION-docker.pkg.dev/$PROJECT_ID/$_REPOSITORY/$_SERVICE_NAME:$COMMIT_SHA"
+      - "."
+
+  # 2. Push the container image to Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    id: "Push Container Image"
+    args:
+      - "push"
+      - "$_AR_LOCATION-docker.pkg.dev/$PROJECT_ID/$_REPOSITORY/$_SERVICE_NAME:$COMMIT_SHA"
+
+  # 3. Deploy the container image to Google Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "Deploy to Cloud Run"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "$_SERVICE_NAME"
+      - "--image"
+      - "$_AR_LOCATION-docker.pkg.dev/$PROJECT_ID/$_REPOSITORY/$_SERVICE_NAME:$COMMIT_SHA"
+      - "--region"
+      - "$_REGION"
+      - "--platform"
+      - "managed"
+      - "--memory"
+      - "128Mi"
+      - "--max-instances"
+      - "1"
+      - "--allow-unauthenticated"
+
+# Images to be registered with Cloud Build metadata
+images:
+  - "$_AR_LOCATION-docker.pkg.dev/$PROJECT_ID/$_REPOSITORY/$_SERVICE_NAME:$COMMIT_SHA"
+
+substitutions:
+  _SERVICE_NAME: "npmv"
+  _REGION: "australia-southeast1" # Sydney region only
+  _AR_LOCATION: "australia-southeast1" # Artifact Registry location
+  _REPOSITORY: "npmv-repo" # Artifact Registry repository name
+
+options:
+  logging: CLOUD_LOGGING_ONLY
