@@ -3,7 +3,7 @@ FROM rust:1.95.0-slim-bookworm AS builder
 WORKDIR /app
 
 # Copy Cargo configuration files first to cache dependencies
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock* ./
 
 # Create dummy main.rs to compile dependencies for caching
 RUN mkdir src && echo "fn main() {}" > src/main.rs
