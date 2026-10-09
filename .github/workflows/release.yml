@@ -48,11 +48,14 @@ jobs:
         id: changelog
         run: |
           # Find the latest tag
-          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || "")
+          # `git describe` exits non-zero when the repository has no tags yet.
+          # Use a no-op fallback rather than an empty command (`|| ""`), which
+          # Bash attempts to execute and therefore fails with exit code 127.
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
           if [ -z "$latest_tag" ]; then
             log=$(git log --pretty=format:"* %s (%h)" --no-merges)
           else
-            log=$(git log ${latest_tag}..HEAD --pretty=format:"* %s (%h)" --no-merges)
+            log=$(git log "${latest_tag}..HEAD" --pretty=format:"* %s (%h)" --no-merges)
           fi
           
           # Default fallback if there are no new commits
