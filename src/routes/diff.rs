@@ -5,7 +5,7 @@ use rocket::response::{status, Responder};
 use rocket::serde::json::Json;
 use rocket::State;
 use similar::TextDiff;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
 use std::path::PathBuf;
 
@@ -170,12 +170,32 @@ pub fn extract_tarball(
     Ok(files)
 }
 
+#[cfg(test)]
 pub fn diff_files(
     path_str: &str,
     old_content: Option<&[u8]>,
     new_content: Option<&[u8]>,
     include_node_modules: bool,
 ) -> Option<String> {
+    diff_files_at_paths(
+        Some(path_str),
+        old_content,
+        Some(path_str),
+        new_content,
+        include_node_modules,
+    )
+}
+
+fn diff_files_at_paths(
+    old_path: Option<&str>,
+    old_content: Option<&[u8]>,
+    new_path: Option<&str>,
+    new_content: Option<&[u8]>,
+    include_node_modules: bool,
+) -> Option<String> {
+    let old_path = old_path.unwrap_or("/dev/null");
+    let new_path = new_path.unwrap_or("/dev/null");
+
     match (old_content, new_content) {
         (Some(old_bytes), Some(new_bytes)) => {
             if old_bytes == new_bytes {
@@ -184,7 +204,7 @@ pub fn diff_files(
             if is_binary(old_bytes) || is_binary(new_bytes) {
                 return Some(format!(
                     "diff -r a/{} b/{}\nBinary files a/{} and b/{} differ\n",
-                    path_str, path_str, path_str, path_str
+                    old_path, new_path, old_path, new_path
                 ));
             }
             let old_raw = String::from_utf8_lossy(old_bytes);
@@ -207,7 +227,7 @@ pub fn diff_files(
             let unified = diff
                 .unified_diff()
                 .context_radius(3)
-                .header(&format!("a/{}", path_str), &format!("b/{}", path_str))
+                .header(&format!("a/{}", old_path), &format!("b/{}", new_path))
                 .to_string();
 
             if unified.trim().is_empty() {
@@ -220,7 +240,7 @@ pub fn diff_files(
             if is_binary(old_bytes) {
                 return Some(format!(
                     "diff -r a/{} /dev/null\nBinary file a/{} deleted\n",
-                    path_str, path_str
+                    old_path, old_path
                 ));
             }
             let old_raw = String::from_utf8_lossy(old_bytes);
@@ -238,7 +258,7 @@ pub fn diff_files(
             let unified = diff
                 .unified_diff()
                 .context_radius(3)
-                .header(&format!("a/{}", path_str), "/dev/null")
+                .header(&format!("a/{}", old_path), "/dev/null")
                 .to_string();
             Some(unified)
         }
@@ -246,7 +266,7 @@ pub fn diff_files(
             if is_binary(new_bytes) {
                 return Some(format!(
                     "diff -r /dev/null b/{}\nBinary file b/{} created\n",
-                    path_str, path_str
+                    new_path, new_path
                 ));
             }
             let new_raw = String::from_utf8_lossy(new_bytes);
@@ -264,12 +284,85 @@ pub fn diff_files(
             let unified = diff
                 .unified_diff()
                 .context_radius(3)
-                .header("/dev/null", &format!("b/{}", path_str))
+                .header("/dev/null", &format!("b/{}", new_path))
                 .to_string();
             Some(unified)
         }
         (None, None) => None,
     }
+}
+
+/// Returns a stable key for common compiled asset names such as
+/// `dist/sdk/CloseIcon-CTY2bpwF.js`. Only a hash-like suffix immediately
+/// before the extension is removed, and only unique keys are paired.
+fn versioned_asset_key(path: &PathBuf) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    let (stem, extension) = file_name.rsplit_once('.')?;
+    // Prefer `-`: base64url hashes may themselves begin with an underscore,
+    // as in `CloseIcon-_KV9iu0n.js`.
+    let separator = stem.rfind('-').or_else(|| stem.rfind('_'))?;
+    let hash = &stem[separator + 1..];
+
+    // Build tools commonly use 8-character base64url hashes. Requiring at
+    // least six alphanumeric characters avoids treating ordinary names such
+    // as `my-component.js` as versioned assets.
+    if hash.chars().filter(|c| c.is_ascii_alphanumeric()).count() < 6
+        || !hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return None;
+    }
+
+    let parent = path.parent()?.to_string_lossy().replace('\\', "/");
+    Some(format!("{}/{}.{}", parent, &stem[..separator], extension))
+}
+
+fn path_string(path: &PathBuf) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+pub(crate) fn pair_diff_paths(
+    old_files: &HashMap<PathBuf, Vec<u8>>,
+    new_files: &HashMap<PathBuf, Vec<u8>>,
+) -> Vec<(Option<PathBuf>, Option<PathBuf>)> {
+    let old_paths: BTreeSet<_> = old_files.keys().cloned().collect();
+    let new_paths: BTreeSet<_> = new_files.keys().cloned().collect();
+    let exact_paths: BTreeSet<_> = old_paths.intersection(&new_paths).cloned().collect();
+    let mut old_unmatched: BTreeSet<_> = old_paths.difference(&exact_paths).cloned().collect();
+    let mut new_unmatched: BTreeSet<_> = new_paths.difference(&exact_paths).cloned().collect();
+    let mut pairs: Vec<_> = exact_paths
+        .into_iter()
+        .map(|path| (Some(path.clone()), Some(path)))
+        .collect();
+
+    let mut old_by_key: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    let mut new_by_key: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for path in &old_unmatched {
+        if let Some(key) = versioned_asset_key(path) {
+            old_by_key.entry(key).or_default().push(path.clone());
+        }
+    }
+    for path in &new_unmatched {
+        if let Some(key) = versioned_asset_key(path) {
+            new_by_key.entry(key).or_default().push(path.clone());
+        }
+    }
+
+    for (key, old_candidates) in old_by_key {
+        let Some(new_candidates) = new_by_key.get(&key) else {
+            continue;
+        };
+        if old_candidates.len() == 1 && new_candidates.len() == 1 {
+            let old_path = old_candidates[0].clone();
+            let new_path = new_candidates[0].clone();
+            old_unmatched.remove(&old_path);
+            new_unmatched.remove(&new_path);
+            pairs.push((Some(old_path), Some(new_path)));
+        }
+    }
+
+    pairs.extend(old_unmatched.into_iter().map(|path| (Some(path), None)));
+    pairs.extend(new_unmatched.into_iter().map(|path| (None, Some(path))));
+    pairs
 }
 
 fn render_html_page(
@@ -489,6 +582,7 @@ fn render_html_page(
     function renderDiff(outputType) {
       const diff2htmlUi = new Diff2HtmlUI(targetElement, diffString, {
         drawFileList: true,
+        fileListStartVisible: true,
         matching: "lines",
         outputFormat: outputType,
         renderNothingWhenEmpty: false,
@@ -713,22 +807,27 @@ pub async fn get_diff(
         }
     };
 
-    let mut all_paths: BTreeSet<PathBuf> = BTreeSet::new();
-    for p in files1.keys() {
-        all_paths.insert(p.clone());
-    }
-    for p in files2.keys() {
-        all_paths.insert(p.clone());
-    }
-
     let mut diff_output = String::new();
 
-    for path in all_paths {
-        let path_str = path.to_string_lossy().replace('\\', "/");
-        let f1 = files1.get(&path).map(|v| v.as_slice());
-        let f2 = files2.get(&path).map(|v| v.as_slice());
+    for (old_path, new_path) in pair_diff_paths(&files1, &files2) {
+        let old_path_str = old_path.as_ref().map(path_string);
+        let new_path_str = new_path.as_ref().map(path_string);
+        let f1 = old_path
+            .as_ref()
+            .and_then(|path| files1.get(path))
+            .map(|v| v.as_slice());
+        let f2 = new_path
+            .as_ref()
+            .and_then(|path| files2.get(path))
+            .map(|v| v.as_slice());
 
-        if let Some(diff_chunk) = diff_files(&path_str, f1, f2, include_node_modules) {
+        if let Some(diff_chunk) = diff_files_at_paths(
+            old_path_str.as_deref(),
+            f1,
+            new_path_str.as_deref(),
+            f2,
+            include_node_modules,
+        ) {
             diff_output.push_str(&diff_chunk);
         }
     }

@@ -2,8 +2,10 @@
 mod tests {
     use crate::models::Release;
     use crate::rocket;
-    use crate::routes::diff::{diff_files, strip_node_modules_regions, DiffQuery};
+    use crate::routes::diff::{diff_files, pair_diff_paths, strip_node_modules_regions, DiffQuery};
     use rocket::http::Status;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[test]
     fn test_diff_query_extract_versions() {
@@ -52,6 +54,30 @@ mod tests {
         let new_content = &[0u8, 1, 2, 4];
         let diff = diff_files("binary.bin", Some(old_content), Some(new_content), false).unwrap();
         assert!(diff.contains("Binary files a/binary.bin and b/binary.bin differ"));
+    }
+
+    #[test]
+    fn pairs_unique_hashed_assets_with_different_filenames() {
+        let old_path = PathBuf::from("dist/sdk/CloseIcon-CTY2bpwF.js");
+        let new_path = PathBuf::from("dist/sdk/CloseIcon-_KV9iu0n.js");
+        let mut old_files = HashMap::new();
+        let mut new_files = HashMap::new();
+        old_files.insert(old_path.clone(), b"export const icon = 1;\n".to_vec());
+        new_files.insert(new_path.clone(), b"export const icon = 2;\n".to_vec());
+
+        assert_eq!(pair_diff_paths(&old_files, &new_files), vec![(Some(old_path), Some(new_path))]);
+    }
+
+    #[test]
+    fn does_not_pair_ambiguous_hashed_assets() {
+        let mut old_files = HashMap::new();
+        let mut new_files = HashMap::new();
+        old_files.insert(PathBuf::from("dist/icon-AAAAAA.js"), vec![]);
+        old_files.insert(PathBuf::from("dist/icon-BBBBBB.js"), vec![]);
+        new_files.insert(PathBuf::from("dist/icon-CCCCCC.js"), vec![]);
+
+        let pairs = pair_diff_paths(&old_files, &new_files);
+        assert!(pairs.iter().all(|(old, new)| old.is_none() || new.is_none()));
     }
 
     #[test]
