@@ -69,6 +69,26 @@ mod tests {
     }
 
     #[test]
+    fn pairs_hashed_assets_whose_hashes_contain_dashes() {
+        let names = [
+            ("epna-DX-S7yA6", "epna-p_tBGPK3"),
+            ("forter-BWK-CuXv", "forter-BKH-4F0d"),
+            ("metrics_global-C--PnyF9", "metrics_global-CxURr43F"),
+            ("payabli-OU7W7cbE", "payabli-4-XnuYBw"),
+        ];
+        let mut old_files = HashMap::new();
+        let mut new_files = HashMap::new();
+        for (old, new) in names {
+            old_files.insert(PathBuf::from(format!("dist/sdk/{old}.js")), vec![]);
+            new_files.insert(PathBuf::from(format!("dist/sdk/{new}.js")), vec![]);
+        }
+
+        let pairs = pair_diff_paths(&old_files, &new_files);
+        assert_eq!(pairs.len(), names.len());
+        assert!(pairs.iter().all(|(old, new)| old.is_some() && new.is_some()));
+    }
+
+    #[test]
     fn does_not_pair_ambiguous_hashed_assets() {
         let mut old_files = HashMap::new();
         let mut new_files = HashMap::new();

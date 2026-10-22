@@ -298,9 +298,18 @@ fn diff_files_at_paths(
 fn versioned_asset_key(path: &PathBuf) -> Option<String> {
     let file_name = path.file_name()?.to_str()?;
     let (stem, extension) = file_name.rsplit_once('.')?;
-    // Prefer `-`: base64url hashes may themselves begin with an underscore,
-    // as in `CloseIcon-_KV9iu0n.js`.
-    let separator = stem.rfind('-').or_else(|| stem.rfind('_'))?;
+    // Base64url hashes (8 chars) may contain `-` or `_` themselves, as in
+    // `epna-DX-S7yA6.js` or `CloseIcon-_KV9iu0n.js`, so first try an
+    // 8-character hash directly after a `-` separator.
+    let bytes = stem.as_bytes();
+    let separator = if stem.is_ascii()
+        && bytes.len() > 9
+        && bytes[bytes.len() - 9] == b'-'
+    {
+        bytes.len() - 9
+    } else {
+        stem.rfind('-').or_else(|| stem.rfind('_'))?
+    };
     let hash = &stem[separator + 1..];
 
     // Build tools commonly use 8-character base64url hashes. Requiring at
